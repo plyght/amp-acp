@@ -1,4 +1,3 @@
-
 use serde::{Deserialize, Serialize};
 
 // Json RPC request response
@@ -136,7 +135,7 @@ pub struct NewSessionResponse {
 #[serde(rename_all = "camelCase")]
 pub struct PromptRequest {
     pub session_id: String,
-    pub prompt: Vec<ContentBlock>,
+    pub prompt: Vec<AmpContentBlock>,
 }
 
 // Session Update
@@ -160,13 +159,13 @@ pub enum SessionUpdate {
 #[derive(Deserialize, Serialize, Debug, Clone)]
 #[serde(rename_all = "snake_case")]
 pub struct AgentMessageChunk {
-    pub content: ContentBlock,
+    pub content: AmpContentBlock,
 }
 
 #[derive(Deserialize, Serialize, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentThoughtChunk {
-    pub content: ContentBlock,
+    pub content: AmpContentBlock,
 }
 
 #[derive(Deserialize, Serialize, Debug, Clone)]
@@ -221,7 +220,7 @@ pub enum AgentToolCallResultContent {
 #[derive(Deserialize, Serialize, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentToolCallResultContentBlock {
-    pub content: ContentBlock,
+    pub content: AmpContentBlock,
 }
 
 #[derive(Deserialize, Serialize, Debug, Clone)]
@@ -249,28 +248,28 @@ pub struct EndTurnResponse {
 #[derive(Deserialize, Serialize, Debug, Clone)]
 #[serde(rename_all = "snake_case")]
 #[serde(tag = "type")]
-pub enum ContentBlock {
-    Text(TextContentBlock),
-    Thinking(ThinkingContentBlock),
-    ToolUse(ToolUseContentBlock),
-    ToolResult(ToolResultContentBlock),
+pub enum AmpContentBlock {
+    Text(AmpTextContentBlock),
+    Thinking(AmpThinkingContentBlock),
+    ToolUse(AmpToolUseContentBlock),
+    ToolResult(AmpToolResultContentBlock),
 }
 
 #[derive(Deserialize, Serialize, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
-pub struct TextContentBlock {
+pub struct AmpTextContentBlock {
     pub text: String,
 }
 
 #[derive(Deserialize, Serialize, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
-pub struct ThinkingContentBlock {
+pub struct AmpThinkingContentBlock {
     pub thinking: String,
 }
 
 #[derive(Deserialize, Serialize, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
-pub struct ToolUseContentBlock {
+pub struct AmpToolUseContentBlock {
     pub id: String,
     pub name: String,
     pub input: serde_json::Value,
@@ -278,9 +277,8 @@ pub struct ToolUseContentBlock {
 
 #[derive(Deserialize, Serialize, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
-pub struct ToolResultContentBlock {
+pub struct AmpToolResultContentBlock {
     #[serde(rename = "toolUseID")]
     pub tool_use_id: String,
-    //#[serde(rename(serialize = "run", deserialize = "content"))]
     pub run: serde_json::Value,
 }
