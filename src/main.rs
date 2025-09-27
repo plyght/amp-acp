@@ -1,238 +1,74 @@
 // JSON-RPC bridge for Amp Agent Control Protocol
 // Enables IDE clients to communicate with Amp CLI for thread management and agent interactions
+mod amp_models;
+mod jsonrpc_models;
+
+use amp_models::*;
+use jsonrpc_models::*;
 
 use std::collections::HashMap;
 use std::env;
 use std::fs::File;
 use std::io::{self, BufRead, BufReader, Read};
-use std::path::Path;
 use std::process::{Command, Stdio};
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
-
-#[derive(Deserialize, Serialize, Debug)]
-pub struct JsonRPCRequest {
-    pub jsonrpc: String,
-    pub id: u32,
-    #[serde(flatten)]
-    pub call: JsonRPCRequestMethodCall,
-}
-
-#[derive(Deserialize, Serialize, Debug)]
-#[serde(tag = "method", content = "params")]
-pub enum JsonRPCRequestMethodCall {
-    #[serde(rename = "initialize")]
-    Initialize(InitializeRequest),
-    #[serde(rename = "session/new")]
-    NewSession(NewSessionRequest),
-    #[serde(rename = "session/prompt")]
-    Prompt(PromptRequest),
-}
-
-#[derive(Deserialize, Serialize, Debug)]
-pub struct AgentJsonRpcResponse<T> {
-    pub jsonrpc: String,
-    pub method: JsonRPCResponseMethod,
-    pub params: T,
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub enum JsonRPCResponseMethod {
-    #[serde(rename = "session/update")]
-    SessionUpdate,
-}
-
-#[derive(Deserialize, Serialize, Debug)]
-#[serde(rename_all = "camelCase")]
-pub struct InitializeRequest {
-    pub protocol_version: u32,
-    pub client_capabilities: ClientCapabilities,
-}
-
-#[derive(Deserialize, Serialize, Debug)]
-#[serde(rename_all = "camelCase")]
-pub struct ClientCapabilities {
-    pub fs: FileSystemCapabilities,
-    pub terminal: bool,
-}
-
-#[derive(Deserialize, Serialize, Debug)]
-#[serde(rename_all = "camelCase")]
-pub struct FileSystemCapabilities {
-    pub read_text_file: bool,
-    pub write_text_file: bool,
-}
-
-//Initialization server response
-#[derive(Deserialize, Serialize, Debug)]
-pub struct JsonRPCResponse<T> {
-    pub jsonrpc: String,
-    pub id: u32,
-    pub result: T,
-}
-
-#[derive(Deserialize, Serialize, Debug)]
-#[serde(rename_all = "camelCase")]
-pub struct SessionUpdateResponse {
-    pub session_id: String,
-    pub update: SessionUpdate,
-}
 
 #[derive(Deserialize, Serialize, Debug, Clone)]
-#[serde(rename_all = "snake_case")]
-#[serde(tag = "sessionUpdate")]
-pub enum SessionUpdate {
-    AgentMessageChunk(AgentMessageChunk),
-    ToolCall(AgentToolCall),
-    ToolCallUpdate(AgentToolCallResult),
+#[serde(rename_all = "camelCase")]
+pub struct AmpConversation {
+    messages: Vec<AmpMessage>,
 }
 
 #[derive(Deserialize, Serialize, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
-pub struct AgentToolCall {
-    tool_call_id: String,
-    title: String,
-    kind: ToolKind,
-    status: ToolCallStatus,
+pub struct AmpMessage {
+    pub role: String,
+    pub content: Vec<ContentBlock>,
 }
 
 #[derive(Deserialize, Serialize, Debug, Clone)]
-#[serde(rename_all = "camelCase")]
-pub struct AgentToolCallResult {
-    tool_call_id: String,
-    status: ToolCallStatus,
-    content: Vec<AgentToolCallResultContent>,
+pub struct AmpEditFileToolCall {
+    pub path: String,
+    pub old_str: String,
+    pub new_str: String,
 }
 
-#[derive(Deserialize, Serialize, Debug, Clone)]
-#[serde(rename_all = "snake_case")]
-#[serde(tag = "type")]
-pub enum AgentToolCallResultContent {
-    Content(AgentToolCallResultContentBlock),
-    Diff(AgentToolCallResultDiffBlock),
-    Follow(AgentToolCallResultFollowBlock),
+pub trait Diff<T> {
+    fn diff(&self, other: &T) -> Option<T>;
 }
 
-#[derive(Deserialize, Serialize, Debug, Clone)]
-#[serde(rename_all = "camelCase")]
-pub struct AgentToolCallResultContentBlock {
-    content: ContentBlock,
-}
+impl Diff<AmpConversation> for AmpConversation {
+    fn diff(&self, other: &AmpConversation) -> Option<AmpConversation> {
+        let num_diff = other.messages.len() - self.messages.len();
+        assert_eq!(num_diff >= 0, true);
+        let messages_diff: Vec<Option<AmpMessage>> = self
+            .messages
+            .iter()
+            .zip(other.messages.iter())
+            .map(|(a, b)| a.diff(b))
+            .collect();
 
-#[derive(Deserialize, Serialize, Debug, Clone)]
-#[serde(rename_all = "camelCase")]
-pub struct AgentToolCallResultDiffBlock {
-    new_text: String,
-    old_text: String,
-    path: String,
-}
-#[derive(Deserialize, Serialize, Debug, Clone)]
-#[serde(rename_all = "camelCase")]
-pub struct AgentToolCallResultFollowBlock {
-    path: String,
-    line: usize,
-}
+        let mut f: Vec<AmpMessage> = messages_diff
+            .iter()
+            .filter(|m| m.is_some())
+            .map(|m| m.clone().unwrap())
+            .collect();
 
-#[derive(Deserialize, Serialize, Debug, Clone)]
-#[serde(rename_all = "snake_case")]
-pub enum ToolCallStatus {
-    Pending,
-    InProgress,
-    Completed,
-    Failed,
-}
-
-#[derive(Deserialize, Serialize, Debug)]
-#[serde(rename_all = "camelCase")]
-pub struct InitializeResponse {
-    pub protocol_version: u32,
-    pub agent_capabilities: AgentCapabilities,
-    pub auth_methods: Vec<String>,
-}
-
-#[derive(Deserialize, Serialize, Debug)]
-#[serde(rename_all = "camelCase")]
-pub struct EndTurnResponse {
-    pub stop_reason: String,
-}
-
-#[derive(Deserialize, Serialize, Debug)]
-#[serde(rename_all = "camelCase")]
-pub struct AgentCapabilities {
-    pub load_session: bool,
-    pub prompt_capabilities: PromptCapabilities,
-    pub mcp: MCP,
-}
-
-#[derive(Deserialize, Serialize, Debug)]
-#[serde(rename_all = "camelCase")]
-pub struct PromptCapabilities {
-    pub image: bool,
-    pub video: bool,
-    pub embeded_context: bool,
-}
-
-#[derive(Deserialize, Serialize, Debug)]
-#[serde(rename_all = "camelCase")]
-pub struct MCP {
-    pub http: bool,
-    pub sse: bool,
-}
-
-#[derive(Deserialize, Serialize, Debug)]
-#[serde(rename_all = "camelCase")]
-pub struct NewSessionResponse {
-    pub session_id: String,
-}
-
-#[derive(Deserialize, Serialize, Debug)]
-#[serde(rename_all = "camelCase")]
-pub struct NewSessionRequest {
-    pub cwd: String,
-    pub mcp_servers: Vec<MCPServer>,
-}
-
-#[derive(Deserialize, Serialize, Debug)]
-#[serde(rename_all = "camelCase")]
-pub struct MCPServer {
-    pub name: String,
-    pub command: String,
-    pub args: Vec<String>,
-    pub env: Vec<EnvironmentVariable>,
-}
-
-#[derive(Deserialize, Serialize, Debug)]
-#[serde(rename_all = "camelCase")]
-pub struct EnvironmentVariable {
-    pub name: String,
-    pub value: String,
-}
-
-//messages
-#[derive(Deserialize, Serialize, Debug)]
-#[serde(rename_all = "camelCase")]
-pub struct PromptRequest {
-    pub session_id: String,
-    pub prompt: Vec<ContentBlock>,
-}
-
-#[derive(Deserialize, Serialize, Debug, Clone)]
-#[serde(rename_all = "camelCase")]
-pub struct TextContentBlock {
-    pub text: String,
-}
-
-#[derive(Deserialize, Serialize, Debug, Clone)]
-#[serde(rename_all = "snake_case")]
-#[serde(tag = "type")]
-pub enum ContentBlock {
-    Text(TextContentBlock),
-    Thinking(ThinkingContentBlock),
-    ToolUse(ToolUseContentBlock),
-    ToolResult(ToolResultContentBlock),
+        if num_diff > 0 {
+            //take the last num_diff items from other
+            let mut rem: Vec<AmpMessage> = other
+                .messages
+                .iter()
+                .map(|c| c.clone())
+                .rev()
+                .take(num_diff)
+                .collect();
+            f.append(&mut rem);
+        }
+        Some(AmpConversation { messages: f })
+    }
 }
 
 impl Diff<ContentBlock> for ContentBlock {
@@ -272,78 +108,6 @@ impl Diff<ContentBlock> for ContentBlock {
     }
 }
 
-#[derive(Deserialize, Serialize, Debug, Clone)]
-#[serde(rename_all = "camelCase")]
-pub struct ThinkingContentBlock {
-    pub thinking: String,
-}
-
-#[derive(Deserialize, Serialize, Debug, Clone)]
-#[serde(rename_all = "camelCase")]
-pub struct ToolUseContentBlock {
-    pub id: String,
-    pub name: String,
-    pub input: serde_json::Value,
-}
-
-#[derive(Deserialize, Serialize, Debug, Clone)]
-#[serde(rename_all = "camelCase")]
-pub struct ToolResultContentBlock {
-    #[serde(rename = "toolUseID")]
-    pub tool_use_id: String,
-    //#[serde(rename(serialize = "run", deserialize = "content"))]
-    pub run: serde_json::Value,
-}
-
-#[derive(Deserialize, Serialize, Debug, Clone)]
-#[serde(rename_all = "camelCase")]
-pub struct AmpConversation {
-    messages: Vec<AmpMessage>,
-}
-
-impl Diff<AmpConversation> for AmpConversation {
-    fn diff(&self, other: &AmpConversation) -> Option<AmpConversation> {
-        let num_diff = other.messages.len() - self.messages.len();
-        assert_eq!(num_diff >= 0, true);
-        let messages_diff: Vec<Option<AmpMessage>> = self
-            .messages
-            .iter()
-            .zip(other.messages.iter())
-            .map(|(a, b)| a.diff(b))
-            .collect();
-
-        let mut f: Vec<AmpMessage> = messages_diff
-            .iter()
-            .filter(|m| m.is_some())
-            .map(|m| m.clone().unwrap())
-            .collect();
-
-        if num_diff > 0 {
-            //take the last num_diff items from other
-            let mut rem: Vec<AmpMessage> = other
-                .messages
-                .iter()
-                .map(|c| c.clone())
-                .rev()
-                .take(num_diff)
-                .collect();
-            f.append(&mut rem);
-        }
-        Some(AmpConversation { messages: f })
-    }
-}
-
-#[derive(Deserialize, Serialize, Debug, Clone)]
-#[serde(rename_all = "camelCase")]
-pub struct AmpMessage {
-    pub role: String,
-    pub content: Vec<ContentBlock>,
-}
-
-trait Diff<T> {
-    fn diff(&self, other: &T) -> Option<T>;
-}
-
 impl Diff<AmpMessage> for AmpMessage {
     fn diff(&self, other: &AmpMessage) -> Option<AmpMessage> {
         let num_diff = other.content.len() - self.content.len();
@@ -379,33 +143,6 @@ impl Diff<AmpMessage> for AmpMessage {
     }
 }
 
-#[derive(Deserialize, Serialize, Debug, Clone)]
-#[serde(rename_all = "snake_case")]
-pub struct AgentMessageChunk {
-    content: ContentBlock,
-}
-
-#[derive(Deserialize, Serialize, Debug, Clone)]
-pub struct EditFileToolCall {
-    pub path: String,
-    pub old_str: String,
-    pub new_str: String,
-}
-
-#[derive(Deserialize, Serialize, Debug, Clone)]
-#[serde(rename_all = "snake_case")]
-pub enum ToolKind {
-    Read,
-    Edit,
-    Delete,
-    Move,
-    Search,
-    Execute,
-    Think,
-    Fetch,
-    Other,
-}
-
 impl ToolKind {
     fn amp_tool_to_tool_kind(amp_tool: &str) -> ToolKind {
         match amp_tool {
@@ -438,7 +175,6 @@ fn main() -> io::Result<()> {
 
     let mut line = String::new();
     let mut current_working_directory = None;
-    let mut session_id = None;
     loop {
         match reader.read_line(&mut line) {
             Ok(0) => {
@@ -493,7 +229,7 @@ fn main() -> io::Result<()> {
                             .output()
                             .expect("failed to execute process");
 
-                        session_id = match String::from_utf8(output.stdout) {
+                        let session_id = match String::from_utf8(output.stdout) {
                             Ok(s) => Some(s.replace("\n", "")),
                             Err(_) => None,
                         };
@@ -546,7 +282,7 @@ fn main() -> io::Result<()> {
                             &session_id.clone()
                         );
 
-                        let mut file_edits: HashMap<String, EditFileToolCall> = HashMap::new();
+                        let mut file_edits: HashMap<String, AmpEditFileToolCall> = HashMap::new();
 
                         let mut conversation_so_far: Option<AmpConversation> = None;
 
@@ -576,10 +312,9 @@ fn main() -> io::Result<()> {
                                                 match block {
                                                     ContentBlock::Text(text_content_block) => {
                                                         if message.role != "user" {
-                                                            let response = AgentJsonRpcResponse {
+                                                            let response = JsonRpcNotification {
                                                             jsonrpc: String::from("2.0"),
-                                                            method: JsonRPCResponseMethod::SessionUpdate,
-                                                            params: SessionUpdateResponse {
+                                                            call: JsonRPCNotificationMethod::SessionUpdate(SessionUpdateResponse {
                                                                 session_id: session_id.clone(),
                                                                 update: SessionUpdate::AgentMessageChunk(
                                                                     AgentMessageChunk {
@@ -588,7 +323,7 @@ fn main() -> io::Result<()> {
                                                                         ),
                                                                     },
                                                                 ),
-                                                            },
+                                                            }),
                                                         };
                                                             println!(
                                                                 "{}",
@@ -599,23 +334,22 @@ fn main() -> io::Result<()> {
                                                     ContentBlock::Thinking(
                                                         thinking_content_block,
                                                     ) => {
-                                                        //       let response = AgentJsonRpcResponse {
-                                                        //     jsonrpc: String::from("2.0"),
-                                                        //     method: JsonRPCResponseMethod::SessionUpdate,
-                                                        //     params: SessionUpdateResponse {
-                                                        //         session_id: session_id.clone(),
-                                                        //         update: SessionUpdate::AgentMessageChunk(
-                                                        //             AgentMessageChunk {
-                                                        //                 content: ContentBlock::Text(TextContentBlock { text: thinking_content_block.thinking }
-                                                        //                 ),
-                                                        //             },
-                                                        //         ),
-                                                        //     },
-                                                        // };
-                                                        //       println!(
-                                                        //           "{}",
-                                                        //           serde_json::to_string(&response)?
-                                                        //       );
+                                                        let response = JsonRpcNotification {
+                                                            jsonrpc: String::from("2.0"),
+                                                            call: JsonRPCNotificationMethod::SessionUpdate(SessionUpdateResponse {
+                                                                session_id: session_id.clone(),
+                                                                update: SessionUpdate::AgentThoughtChunk(
+                                                                    AgentThoughtChunk {
+                                                                        content: ContentBlock::Text(TextContentBlock { text: thinking_content_block.thinking }
+                                                                        ),
+                                                                    },
+                                                                ),
+                                                            }),
+                                                        };
+                                                        println!(
+                                                            "{}",
+                                                            serde_json::to_string(&response)?
+                                                        );
                                                     }
                                                     ContentBlock::ToolUse(
                                                         tool_use_content_block,
@@ -625,7 +359,7 @@ fn main() -> io::Result<()> {
                                                                 dbg!("edit file");
                                                                 dbg!(&tool_use_content_block);
                                                                 let data: Result<
-                                                                    EditFileToolCall,
+                                                                    AmpEditFileToolCall,
                                                                     serde_json::Error,
                                                                 > = serde_json::from_value(
                                                                     tool_use_content_block.input,
@@ -644,14 +378,12 @@ fn main() -> io::Result<()> {
                                                                 // Handle unknown name
                                                             }
                                                         }
-                                                        let response = AgentJsonRpcResponse {
+                                                        let response = JsonRpcNotification {
                                                             jsonrpc: String::from("2.0"),
-                                                            method:
-                                                                JsonRPCResponseMethod::SessionUpdate,
-                                                            params: SessionUpdateResponse {
+                                                            call: JsonRPCNotificationMethod::SessionUpdate(SessionUpdateResponse {
                                                                 session_id: session_id.clone(),
                                                                 update: SessionUpdate::ToolCall(
-                                                                    AgentToolCall {
+                                                                    ToolCall {
                                                                         tool_call_id:
                                                                             tool_use_content_block
                                                                                 .id,
@@ -664,7 +396,7 @@ fn main() -> io::Result<()> {
                                                                             ToolCallStatus::Pending,
                                                                     },
                                                                 ),
-                                                            },
+                                                            }),
                                                         };
                                                         println!(
                                                             "{}",
@@ -680,7 +412,7 @@ fn main() -> io::Result<()> {
                                                             &tool_result_content_block.tool_use_id,
                                                         ) {
                                                             let mut tool_call_result =
-                                                            AgentToolCallResult {
+                                                            ToolCallUpdate {
                                                               tool_call_id: tool_result_content_block.tool_use_id,
                                                               status: ToolCallStatus::Completed,
                                                               content: vec![
@@ -726,7 +458,7 @@ fn main() -> io::Result<()> {
                                                             );
                                                         } else {
                                                             update = SessionUpdate::ToolCallUpdate(
-                                                              AgentToolCallResult {
+                                                              ToolCallUpdate {
                                                                 tool_call_id: tool_result_content_block.tool_use_id,
                                                                 status: ToolCallStatus::Completed,
                                                                 content: vec![
@@ -740,14 +472,12 @@ fn main() -> io::Result<()> {
                                                           );
                                                         }
 
-                                                        let response = AgentJsonRpcResponse {
+                                                        let response = JsonRpcNotification {
                                                             jsonrpc: String::from("2.0"),
-                                                            method:
-                                                                JsonRPCResponseMethod::SessionUpdate,
-                                                            params: SessionUpdateResponse {
+                                                            call: JsonRPCNotificationMethod::SessionUpdate(SessionUpdateResponse {
                                                                 session_id: session_id.clone(),
                                                                 update,
-                                                            },
+                                                            }),
                                                         };
                                                         println!(
                                                             "{}",
