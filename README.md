@@ -9,7 +9,8 @@ The project has only been tested this on Macos 26 so far
 - Create Session
 - Streamed messages
 - Thinking
-- File edits rendered as diff in chat a
+- File edits rendered as diff in chat
+- Cancellation
 
 ## Unsupported features
 - Resources
