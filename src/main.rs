@@ -1,9 +1,4 @@
-// JSON-RPC bridge for Amp Agent Control Protocol
-// Enables IDE clients to communicate with Amp CLI for thread management and agent interactions
-mod amp_models;
 mod jsonrpc_models;
-
-use amp_models::*;
 use jsonrpc_models::*;
 
 use std::collections::HashMap;
@@ -42,7 +37,7 @@ pub trait Diff<T> {
 impl Diff<AmpConversation> for AmpConversation {
     fn diff(&self, other: &AmpConversation) -> Option<AmpConversation> {
         let num_diff = other.messages.len() - self.messages.len();
-        assert_eq!(num_diff >= 0, true);
+        assert!(num_diff >= 0);
         let messages_diff: Vec<Option<AmpMessage>> = self
             .messages
             .iter()
@@ -50,18 +45,14 @@ impl Diff<AmpConversation> for AmpConversation {
             .map(|(a, b)| a.diff(b))
             .collect();
 
-        let mut f: Vec<AmpMessage> = messages_diff
-            .iter()
-            .filter(|m| m.is_some())
-            .map(|m| m.clone().unwrap())
-            .collect();
+        let mut f: Vec<AmpMessage> = messages_diff.iter().filter_map(|m| m.clone()).collect();
 
         if num_diff > 0 {
             //take the last num_diff items from other
             let mut rem: Vec<AmpMessage> = other
                 .messages
                 .iter()
-                .map(|c| c.clone())
+                .cloned()
                 .rev()
                 .take(num_diff)
                 .collect();
@@ -111,26 +102,19 @@ impl Diff<ContentBlock> for ContentBlock {
 impl Diff<AmpMessage> for AmpMessage {
     fn diff(&self, other: &AmpMessage) -> Option<AmpMessage> {
         let num_diff = other.content.len() - self.content.len();
-        assert_eq!(num_diff >= 0, true);
+        assert!(num_diff >= 0);
         if self.role == other.role {
             let mut content_diff: Vec<ContentBlock> = self
                 .content
                 .iter()
                 .zip(other.content.iter())
-                .map(|(a, b)| a.diff(b))
-                .filter(|m| m.is_some())
-                .map(|m| m.unwrap())
+                .filter_map(|(a, b)| a.diff(b))
                 .collect();
 
             if num_diff > 0 {
                 //take the last num_diff items from other
-                let mut rem: Vec<ContentBlock> = other
-                    .content
-                    .iter()
-                    .map(|c| c.clone())
-                    .rev()
-                    .take(num_diff)
-                    .collect();
+                let mut rem: Vec<ContentBlock> =
+                    other.content.iter().cloned().rev().take(num_diff).collect();
                 content_diff.append(&mut rem);
             }
             Some(AmpMessage {
@@ -444,7 +428,7 @@ fn main() -> io::Result<()> {
                                                                         .unwrap()
                                                                         .split(",")
                                                                         .collect::<Vec<&str>>()
-                                                                        .get(0)
+                                                                        .first()
                                                                         .unwrap()
                                                                         .replace("+", "");
                                                                     let t = AgentToolCallResultContent::Follow(AgentToolCallResultFollowBlock { path: file_edit.path, line: line.parse().unwrap()});
@@ -492,7 +476,7 @@ fn main() -> io::Result<()> {
                                     //println!("Diff: {:?}", diff);
                                     conversation_so_far = Some(conversation);
 
-                                    if let Some(_) = status {
+                                    if status.is_some() {
                                         //finished processing user response
                                         // Send a end turn response
                                         let res = JsonRPCResponse {
