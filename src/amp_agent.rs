@@ -232,6 +232,17 @@ impl AmpAgent {
     }
 }
 
+fn get_line_number_from_diff_str(diff: &str) -> Option<u32> {
+    let parts = diff.split("@@").collect::<Vec<&str>>();
+    let header = parts.get(1)?.trim();
+    let line_info_parts = header.split(" ").collect::<Vec<&str>>();
+    let final_line_number = line_info_parts.get(1)?;
+    let line_number_parts = final_line_number.split(",").collect::<Vec<&str>>();
+    let line_number = line_number_parts.first()?.replace("+", "").parse::<u32>();
+
+    line_number.ok()
+}
+
 #[async_trait::async_trait(?Send)]
 impl Agent for AmpAgent {
     async fn initialize(&self, request: InitializeRequest) -> Result<InitializeResponse, Error> {
@@ -327,6 +338,14 @@ impl Agent for AmpAgent {
 
         // Wait for the process to complete
         let home_dir = env::home_dir().unwrap();
+
+        // Implementation note
+        // AMP has a json mode but this has some drawbacks
+        // 1. Tokens within a message are not streamed
+        // 2. No thinking
+        // 3. Tool call and result blocks appear to come together rather then one by one
+        //
+        // Due to this we read the thread file directly and diff the changes. Although this is a more brittle and complicated approach it allows us to get the features laid out above which I believe provides a better user experience
 
         //keep checking the file
         let thread_path = format!(
@@ -465,40 +484,22 @@ impl Agent for AmpAgent {
                                         }
                                     }
                                     AmpContentBlock::ToolResult(tool_result_content_block) => {
-                                        //check if theres a file edit for this
                                         let update;
                                         let mut line = None;
+
+                                        //check if theres a file edit for this tool call
                                         if let Some(file_edit) = file_edits
                                             .remove(&tool_result_content_block.tool_use_id)
                                         {
                                             if let Some(result) =
                                                 &tool_result_content_block.run.get("result")
                                             {
-                                                // Todo: Implement proper logic for this
+                                                // Parse the diff to get the line numbers
                                                 if let Some(diff) = result.get("diff") {
-                                                    let lines = diff
-                                                        .as_str()
-                                                        .unwrap()
-                                                        .split("@@")
-                                                        .collect::<Vec<&str>>();
-
-                                                    line = Some(
-                                                        lines
-                                                            .get(1)
-                                                            .unwrap()
-                                                            .trim()
-                                                            .split(" ")
-                                                            .collect::<Vec<&str>>()
-                                                            .get(1)
-                                                            .unwrap()
-                                                            .split(",")
-                                                            .collect::<Vec<&str>>()
-                                                            .first()
-                                                            .unwrap()
-                                                            .replace("+", "")
-                                                            .parse::<u32>()
-                                                            .unwrap(),
-                                                    );
+                                                    if let Some(diff_str) = diff.as_str() {
+                                                        line =
+                                                            get_line_number_from_diff_str(diff_str);
+                                                    }
                                                 }
                                             }
                                             update = ToolCallUpdate {
