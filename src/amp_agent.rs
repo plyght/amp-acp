@@ -235,18 +235,181 @@ impl AmpAgent {
         Rc::clone(self.client.get().expect("Client should be set"))
     }
 
-    pub fn get_amp_thread(&self, thread_id: &SessionId) -> Option<AmpConversation> {
+    pub fn get_amp_thread(&self, thread_id: SessionId) -> Option<AmpConversation> {
         let thread_id_str: &str = &thread_id.0;
         let thread_path = self
             .threads_directory
             .join(format!("{}.json", thread_id_str));
-        dbg!(&thread_path);
+
         let mut file = File::open(&thread_path).expect("Failed to open amp thread file");
         let mut contents = String::new();
         file.read_to_string(&mut contents)
             .expect("Failed to read amp thread file");
 
         serde_json::from_str(&contents).ok()
+    }
+
+    async fn process_conversation(&self, conversation: &AmpConversation, session_id: SessionId) {
+        let mut file_edits: HashMap<String, AmpEditFileToolCall> = HashMap::new();
+        for message in &conversation.messages {
+            for block in &message.content {
+                match block {
+                    AmpContentBlock::Text(text_content_block) => {
+                        if message.role != "user" {
+                            let notification = SessionNotification {
+                                session_id: session_id.clone(),
+                                update: SessionUpdate::AgentMessageChunk {
+                                    content: ContentBlock::Text(TextContent {
+                                        annotations: None,
+                                        text: text_content_block.text.clone(),
+                                        meta: None,
+                                    }),
+                                },
+                                meta: None,
+                            };
+
+                            if let Err(e) = self.client().session_notification(notification).await {
+                                error!("Failed to send session notification: {:?}", e);
+                            }
+                        }
+                    }
+                    AmpContentBlock::Thinking(thinking_content_block) => {
+                        let notification = SessionNotification {
+                            session_id: session_id.clone(),
+                            update: SessionUpdate::AgentThoughtChunk {
+                                content: ContentBlock::Text(TextContent {
+                                    annotations: None,
+                                    text: thinking_content_block.thinking.clone(),
+                                    meta: None,
+                                }),
+                            },
+                            meta: None,
+                        };
+
+                        if let Err(e) = self.client().session_notification(notification).await {
+                            error!("Failed to send session notification: {:?}", e);
+                        }
+                    }
+                    AmpContentBlock::ToolUse(tool_use_content_block) => {
+                        match tool_use_content_block.name.as_str() {
+                            "edit_file" => {
+                                dbg!("edit file");
+                                dbg!(&tool_use_content_block);
+                                let data: Result<AmpEditFileToolCall, serde_json::Error> =
+                                    serde_json::from_value(tool_use_content_block.input.clone());
+
+                                if let Ok(data) = data {
+                                    file_edits.insert(tool_use_content_block.id.clone(), data);
+                                }
+                            }
+                            _ => {
+                                // Handle unknown name
+                            }
+                        }
+
+                        let notification = SessionNotification {
+                            session_id: session_id.clone(),
+                            update: SessionUpdate::ToolCall(ToolCall {
+                                id: ToolCallId(Arc::from(tool_use_content_block.id.clone())),
+                                kind: amp_tool_to_tool_kind(tool_use_content_block.name.as_str()),
+                                status: ToolCallStatus::Pending,
+                                title: tool_use_content_block.name.clone(),
+                                content: vec![],
+                                locations: vec![],
+                                raw_input: None,
+                                raw_output: None,
+
+                                meta: None,
+                            }),
+                            meta: None,
+                        };
+
+                        if let Err(e) = self.client().session_notification(notification).await {
+                            error!("Failed to send session notification: {:?}", e);
+                        }
+                    }
+                    AmpContentBlock::ToolResult(tool_result_content_block) => {
+                        let update;
+                        let mut line = None;
+
+                        //check if theres a file edit for this tool call
+                        if let Some(file_edit) =
+                            file_edits.remove(&tool_result_content_block.tool_use_id)
+                        {
+                            if let Some(result) = &tool_result_content_block.run.get("result") {
+                                // Parse the diff to get the line numbers
+                                if let Some(diff) = result.get("diff") {
+                                    if let Some(diff_str) = diff.as_str() {
+                                        line = get_line_number_from_diff_str(diff_str);
+                                    }
+                                }
+                            }
+                            update = ToolCallUpdate {
+                                id: ToolCallId(Arc::from(
+                                    tool_result_content_block.tool_use_id.clone(),
+                                )),
+                                fields: ToolCallUpdateFields {
+                                    kind: None,
+                                    status: Some(ToolCallStatus::Completed),
+                                    title: None,
+                                    content: Some(vec![ToolCallContent::Diff {
+                                        diff: Diff {
+                                            path: PathBuf::from(file_edit.path.clone()),
+                                            old_text: Some(file_edit.old_str),
+                                            new_text: file_edit.new_str,
+                                            meta: None,
+                                        },
+                                    }]),
+                                    locations: Some(vec![ToolCallLocation {
+                                        path: PathBuf::from(file_edit.path.clone()),
+                                        line,
+                                        meta: None,
+                                    }]),
+                                    raw_input: None,
+                                    raw_output: None,
+                                },
+                                meta: None,
+                            };
+                        } else {
+                            update = ToolCallUpdate {
+                                id: ToolCallId(Arc::from(
+                                    tool_result_content_block.tool_use_id.clone(),
+                                )),
+                                fields: ToolCallUpdateFields {
+                                    content: Some(vec![ToolCallContent::Content {
+                                        content: ContentBlock::Text(TextContent {
+                                            text: tool_result_content_block.run.to_string(),
+                                            annotations: None,
+                                            meta: None,
+                                        }),
+                                    }]),
+                                    kind: None,
+                                    status: Some(ToolCallStatus::Completed),
+                                    title: None,
+                                    locations: None,
+                                    raw_input: None,
+                                    raw_output: None,
+                                },
+
+                                meta: None,
+                            };
+                        }
+
+                        if let Err(e) = self
+                            .client()
+                            .session_notification(SessionNotification {
+                                session_id: session_id.clone(),
+                                update: SessionUpdate::ToolCallUpdate(update),
+                                meta: None,
+                            })
+                            .await
+                        {
+                            error!("Failed to send session notification: {:?}", e);
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -323,6 +486,16 @@ impl Agent for AmpAgent {
         request: LoadSessionRequest,
     ) -> Result<LoadSessionResponse, Error> {
         todo!()
+        // Loading sessions is not currently suppored by Zed, the code below should be mostly what is needed to support this.
+        // Note: There is an `if message.role != "user" {` that will need to be sorted out as session loading should replay user messages aswell
+        //
+        // if let Some(conversation) = self.get_amp_thread(request.session_id.clone()) {
+        //     self.process_conversation(&conversation, request.session_id)
+        //         .await;
+        //     todo!()
+        // } else {
+        //     Err(Error::internal_error().with_data("Could not open amp thread"))
+        // }
     }
 
     async fn prompt(&self, request: PromptRequest) -> Result<PromptResponse, Error> {
@@ -354,9 +527,6 @@ impl Agent for AmpAgent {
 
         self.set_amp_command(output);
 
-        // Wait for the process to complete
-        let home_dir = env::home_dir().unwrap();
-
         // Implementation note
         // AMP has a json mode but this has some drawbacks
         // 1. Tokens within a message are not streamed
@@ -365,8 +535,7 @@ impl Agent for AmpAgent {
         //
         // Due to this we read the thread file directly and diff the changes. Although this is a more brittle and complicated approach it allows us to get the features laid out above which I believe provides a better user experience
 
-        let mut file_edits: HashMap<String, AmpEditFileToolCall> = HashMap::new();
-
+        // We keep track of the state of the conversation so that we can diff it with the new state to know what to send to the acp client
         let mut conversation_so_far: Option<AmpConversation> = None;
         let session_id = request.session_id;
         loop {
@@ -379,7 +548,7 @@ impl Agent for AmpAgent {
             if let Err(e) = res {
                 return Err(Error::internal_error());
             } else if let Ok(status) = res {
-                let conversation = match self.get_amp_thread(&session_id) {
+                let conversation = match self.get_amp_thread(session_id.clone()) {
                     Some(conversation) => conversation,
                     None => return Err(Error::internal_error()),
                 };
@@ -388,198 +557,10 @@ impl Agent for AmpAgent {
                     conversation_so_far = Some(conversation.clone());
                 } else if let Some(ref mut prev_conversation) = conversation_so_far {
                     let diff = prev_conversation.diff(&conversation);
-
                     if let Some(conversation) = diff {
-                        for message in conversation.messages {
-                            for block in message.content {
-                                match block {
-                                    AmpContentBlock::Text(text_content_block) => {
-                                        if message.role != "user" {
-                                            let notification = SessionNotification {
-                                                session_id: session_id.clone(),
-                                                update: SessionUpdate::AgentMessageChunk {
-                                                    content: ContentBlock::Text(TextContent {
-                                                        annotations: None,
-                                                        text: text_content_block.text,
-                                                        meta: None,
-                                                    }),
-                                                },
-                                                meta: None,
-                                            };
-
-                                            if let Err(e) = self
-                                                .client()
-                                                .session_notification(notification)
-                                                .await
-                                            {
-                                                error!(
-                                                    "Failed to send session notification: {:?}",
-                                                    e
-                                                );
-                                            }
-                                        }
-                                    }
-                                    AmpContentBlock::Thinking(thinking_content_block) => {
-                                        let notification = SessionNotification {
-                                            session_id: session_id.clone(),
-                                            update: SessionUpdate::AgentThoughtChunk {
-                                                content: ContentBlock::Text(TextContent {
-                                                    annotations: None,
-                                                    text: thinking_content_block.thinking,
-                                                    meta: None,
-                                                }),
-                                            },
-                                            meta: None,
-                                        };
-
-                                        if let Err(e) =
-                                            self.client().session_notification(notification).await
-                                        {
-                                            error!("Failed to send session notification: {:?}", e);
-                                        }
-                                    }
-                                    AmpContentBlock::ToolUse(tool_use_content_block) => {
-                                        match tool_use_content_block.name.as_str() {
-                                            "edit_file" => {
-                                                dbg!("edit file");
-                                                dbg!(&tool_use_content_block);
-                                                let data: Result<
-                                                    AmpEditFileToolCall,
-                                                    serde_json::Error,
-                                                > = serde_json::from_value(
-                                                    tool_use_content_block.input,
-                                                );
-
-                                                if let Ok(data) = data {
-                                                    file_edits.insert(
-                                                        tool_use_content_block.id.clone(),
-                                                        data,
-                                                    );
-                                                }
-                                            }
-                                            _ => {
-                                                // Handle unknown name
-                                            }
-                                        }
-
-                                        let notification = SessionNotification {
-                                            session_id: session_id.clone(),
-                                            update: SessionUpdate::ToolCall(ToolCall {
-                                                id: ToolCallId(Arc::from(
-                                                    tool_use_content_block.id,
-                                                )),
-                                                kind: amp_tool_to_tool_kind(
-                                                    tool_use_content_block.name.as_str(),
-                                                ),
-                                                status: ToolCallStatus::Pending,
-                                                title: tool_use_content_block.name.clone(),
-                                                content: vec![],
-                                                locations: vec![],
-                                                raw_input: None,
-                                                raw_output: None,
-
-                                                meta: None,
-                                            }),
-                                            meta: None,
-                                        };
-
-                                        if let Err(e) =
-                                            self.client().session_notification(notification).await
-                                        {
-                                            error!("Failed to send session notification: {:?}", e);
-                                        }
-                                    }
-                                    AmpContentBlock::ToolResult(tool_result_content_block) => {
-                                        let update;
-                                        let mut line = None;
-
-                                        //check if theres a file edit for this tool call
-                                        if let Some(file_edit) = file_edits
-                                            .remove(&tool_result_content_block.tool_use_id)
-                                        {
-                                            if let Some(result) =
-                                                &tool_result_content_block.run.get("result")
-                                            {
-                                                // Parse the diff to get the line numbers
-                                                if let Some(diff) = result.get("diff") {
-                                                    if let Some(diff_str) = diff.as_str() {
-                                                        line =
-                                                            get_line_number_from_diff_str(diff_str);
-                                                    }
-                                                }
-                                            }
-                                            update = ToolCallUpdate {
-                                                id: ToolCallId(Arc::from(
-                                                    tool_result_content_block.tool_use_id,
-                                                )),
-                                                fields: ToolCallUpdateFields {
-                                                    kind: None,
-                                                    status: Some(ToolCallStatus::Completed),
-                                                    title: None,
-                                                    content: Some(vec![ToolCallContent::Diff {
-                                                        diff: Diff {
-                                                            path: PathBuf::from(
-                                                                file_edit.path.clone(),
-                                                            ),
-                                                            old_text: Some(file_edit.old_str),
-                                                            new_text: file_edit.new_str,
-                                                            meta: None,
-                                                        },
-                                                    }]),
-                                                    locations: Some(vec![ToolCallLocation {
-                                                        path: PathBuf::from(file_edit.path.clone()),
-                                                        line,
-                                                        meta: None,
-                                                    }]),
-                                                    raw_input: None,
-                                                    raw_output: None,
-                                                },
-                                                meta: None,
-                                            };
-                                        } else {
-                                            update = ToolCallUpdate {
-                                                id: ToolCallId(Arc::from(
-                                                    tool_result_content_block.tool_use_id,
-                                                )),
-                                                fields: ToolCallUpdateFields {
-                                                    content: Some(vec![ToolCallContent::Content {
-                                                        content: ContentBlock::Text(TextContent {
-                                                            text: tool_result_content_block
-                                                                .run
-                                                                .to_string(),
-                                                            annotations: None,
-                                                            meta: None,
-                                                        }),
-                                                    }]),
-                                                    kind: None,
-                                                    status: Some(ToolCallStatus::Completed),
-                                                    title: None,
-                                                    locations: None,
-                                                    raw_input: None,
-                                                    raw_output: None,
-                                                },
-
-                                                meta: None,
-                                            };
-                                        }
-
-                                        if let Err(e) = self
-                                            .client()
-                                            .session_notification(SessionNotification {
-                                                session_id: session_id.clone(),
-                                                update: SessionUpdate::ToolCallUpdate(update),
-                                                meta: None,
-                                            })
-                                            .await
-                                        {
-                                            error!("Failed to send session notification: {:?}", e);
-                                        }
-                                    }
-                                }
-                            }
-                        }
+                        self.process_conversation(&conversation, session_id.clone())
+                            .await;
                     }
-
                     conversation_so_far = Some(conversation);
 
                     if status.is_some() {
