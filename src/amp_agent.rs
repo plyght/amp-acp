@@ -326,7 +326,7 @@ impl Agent for AmpAgent {
     }
 
     async fn prompt(&self, request: PromptRequest) -> Result<PromptResponse, Error> {
-        let mut output = Command::new("amp")
+        let output = Command::new("amp")
             .current_dir(self.cwd.borrow().clone().unwrap())
             .args([
                 "threads",
@@ -365,13 +365,6 @@ impl Agent for AmpAgent {
         //
         // Due to this we read the thread file directly and diff the changes. Although this is a more brittle and complicated approach it allows us to get the features laid out above which I believe provides a better user experience
 
-        //keep checking the file
-        let thread_path = format!(
-            "{}/.local/share/amp/threads/{}.json",
-            home_dir.display(),
-            &request.session_id.0
-        );
-
         let mut file_edits: HashMap<String, AmpEditFileToolCall> = HashMap::new();
 
         let mut conversation_so_far: Option<AmpConversation> = None;
@@ -386,11 +379,6 @@ impl Agent for AmpAgent {
             if let Err(e) = res {
                 return Err(Error::internal_error());
             } else if let Ok(status) = res {
-                let mut file = File::open(&thread_path).expect("Failed to open amp thread file");
-                let mut contents = String::new();
-                file.read_to_string(&mut contents)
-                    .expect("Failed to read amp thread file");
-
                 let conversation = match self.get_amp_thread(&session_id) {
                     Some(conversation) => conversation,
                     None => return Err(Error::internal_error()),
