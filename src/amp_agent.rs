@@ -455,23 +455,20 @@ impl Agent for AmpAgent {
 
                                         let notification = SessionNotification {
                                             session_id: session_id.clone(),
-                                            update: SessionUpdate::ToolCallUpdate(ToolCallUpdate {
+                                            update: SessionUpdate::ToolCall(ToolCall {
                                                 id: ToolCallId(Arc::from(
                                                     tool_use_content_block.id,
                                                 )),
-                                                fields: ToolCallUpdateFields {
-                                                    kind: Some(amp_tool_to_tool_kind(
-                                                        tool_use_content_block.name.as_str(),
-                                                    )),
-                                                    status: Some(ToolCallStatus::Pending),
-                                                    title: Some(
-                                                        tool_use_content_block.name.clone(),
-                                                    ),
-                                                    content: None,
-                                                    locations: None,
-                                                    raw_input: None,
-                                                    raw_output: None,
-                                                },
+                                                kind: amp_tool_to_tool_kind(
+                                                    tool_use_content_block.name.as_str(),
+                                                ),
+                                                status: ToolCallStatus::Pending,
+                                                title: tool_use_content_block.name.clone(),
+                                                content: vec![],
+                                                locations: vec![],
+                                                raw_input: None,
+                                                raw_output: None,
+
                                                 meta: None,
                                             }),
                                             meta: None,
