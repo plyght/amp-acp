@@ -92,7 +92,6 @@ pub trait AmpDiff<T> {
 impl AmpDiff<AmpConversation> for AmpConversation {
     fn diff(&self, other: &AmpConversation) -> Option<AmpConversation> {
         let num_diff = other.messages.len() - self.messages.len();
-        assert!(num_diff >= 0);
         let messages_diff: Vec<Option<AmpMessage>> = self
             .messages
             .iter()
@@ -157,7 +156,6 @@ impl AmpDiff<AmpContentBlock> for AmpContentBlock {
 impl AmpDiff<AmpMessage> for AmpMessage {
     fn diff(&self, other: &AmpMessage) -> Option<AmpMessage> {
         let num_diff = other.content.len() - self.content.len();
-        assert!(num_diff >= 0);
         if self.role == other.role {
             let mut content_diff: Vec<AmpContentBlock> = self
                 .content
@@ -208,14 +206,20 @@ pub struct AmpAgent {
     cwd: Rc<RefCell<Option<PathBuf>>>,
     client: OnceCell<Rc<AgentSideConnection>>,
     amp_command: Rc<RefCell<Option<Child>>>,
+    threads_directory: PathBuf,
 }
 
 impl AmpAgent {
     pub fn new() -> Self {
+        // Todo: Windows support
+        let home_dir = env::home_dir().unwrap();
+        let threads_directory = format!("{}/.local/share/amp/threads/", home_dir.display());
+
         Self {
             cwd: Rc::new(RefCell::new(None)),
             client: OnceCell::new(),
             amp_command: Rc::new(RefCell::new(None)),
+            threads_directory: PathBuf::from(threads_directory),
         }
     }
 
@@ -229,6 +233,20 @@ impl AmpAgent {
 
     pub fn client(&self) -> Rc<AgentSideConnection> {
         Rc::clone(self.client.get().expect("Client should be set"))
+    }
+
+    pub fn get_amp_thread(&self, thread_id: &SessionId) -> Option<AmpConversation> {
+        let thread_id_str: &str = &thread_id.0;
+        let thread_path = self
+            .threads_directory
+            .join(format!("{}.json", thread_id_str));
+        dbg!(&thread_path);
+        let mut file = File::open(&thread_path).expect("Failed to open amp thread file");
+        let mut contents = String::new();
+        file.read_to_string(&mut contents)
+            .expect("Failed to read amp thread file");
+
+        serde_json::from_str(&contents).ok()
     }
 }
 
@@ -373,7 +391,10 @@ impl Agent for AmpAgent {
                 file.read_to_string(&mut contents)
                     .expect("Failed to read amp thread file");
 
-                let conversation: AmpConversation = serde_json::from_str(&contents)?;
+                let conversation = match self.get_amp_thread(&session_id) {
+                    Some(conversation) => conversation,
+                    None => return Err(Error::internal_error()),
+                };
 
                 if conversation_so_far.is_none() {
                     conversation_so_far = Some(conversation.clone());
@@ -588,7 +609,6 @@ impl Agent for AmpAgent {
     }
 
     async fn cancel(&self, args: CancelNotification) -> Result<(), Error> {
-        //if amp is in the middle of a text response it will not save it to the conversation. They must intentionally undo it
         (*self.amp_command).borrow_mut().as_mut().unwrap().kill();
         Ok(())
     }
