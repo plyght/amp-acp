@@ -42,7 +42,7 @@ pub struct AmpMessage {
 #[derive(Deserialize, Serialize, Debug, Clone)]
 pub struct AmpEditFileToolCall {
     pub path: String,
-    pub old_str: String,
+    pub old_str: Option<String>,
     pub new_str: String,
 }
 use serde::{Deserialize, Serialize};
@@ -83,6 +83,76 @@ pub struct AmpToolResultContentBlock {
     #[serde(rename = "toolUseID")]
     pub tool_use_id: String,
     pub run: serde_json::Value,
+}
+
+#[derive(Deserialize, Serialize, Debug, Clone)]
+#[serde(rename_all = "lowercase")]
+pub struct AmpPlanWriteToolCall {
+    pub todos: Vec<AmpPlanTodo>,
+}
+
+#[derive(Deserialize, Serialize, Debug, Clone)]
+#[serde(rename_all = "lowercase")]
+pub struct AmpPlanTodo {
+    pub id: String,
+    pub content: String,
+    pub status: AmpPlanTodoStatus,
+    pub priority: AmpPlanTodoPriority,
+}
+
+#[derive(Deserialize, Serialize, Debug, Clone)]
+#[serde(rename_all = "lowercase")]
+pub enum AmpPlanTodoStatus {
+    Completed,
+    Todo,
+    #[serde(rename = "in-progress")]
+    InProgress,
+}
+
+impl AmpPlanTodoStatus {
+    pub fn to_acp_plan_status(&self) -> PlanEntryStatus {
+        match self {
+            AmpPlanTodoStatus::Completed => PlanEntryStatus::Completed,
+            AmpPlanTodoStatus::Todo => PlanEntryStatus::Pending,
+            AmpPlanTodoStatus::InProgress => PlanEntryStatus::InProgress,
+        }
+    }
+}
+
+#[derive(Deserialize, Serialize, Debug, Clone)]
+#[serde(rename_all = "lowercase")]
+pub enum AmpPlanTodoPriority {
+    High,
+    Medium,
+    Low,
+}
+
+impl AmpPlanTodoPriority {
+    pub fn to_acp_plan_priority(&self) -> PlanEntryPriority {
+        match self {
+            AmpPlanTodoPriority::High => PlanEntryPriority::High,
+            AmpPlanTodoPriority::Medium => PlanEntryPriority::Medium,
+            AmpPlanTodoPriority::Low => PlanEntryPriority::Low,
+        }
+    }
+}
+
+impl AmpPlanWriteToolCall {
+    pub fn to_acp_plan(&self) -> Plan {
+        Plan {
+            entries: self
+                .todos
+                .iter()
+                .map(|todo| PlanEntry {
+                    content: todo.content.clone(),
+                    status: todo.status.clone().to_acp_plan_status(),
+                    priority: todo.priority.clone().to_acp_plan_priority(),
+                    meta: None,
+                })
+                .collect(),
+            meta: None,
+        }
+    }
 }
 
 pub trait AmpDiff<T> {
@@ -293,18 +363,38 @@ impl AmpAgent {
                     AmpContentBlock::ToolUse(tool_use_content_block) => {
                         match tool_use_content_block.name.as_str() {
                             "edit_file" => {
-                                dbg!("edit file");
-                                dbg!(&tool_use_content_block);
                                 let data: Result<AmpEditFileToolCall, serde_json::Error> =
                                     serde_json::from_value(tool_use_content_block.input.clone());
 
                                 if let Ok(data) = data {
-                                    file_edits.insert(tool_use_content_block.id.clone(), data);
+                                    if !file_edits.contains_key(&tool_use_content_block.id.clone())
+                                    {
+                                        file_edits.insert(tool_use_content_block.id.clone(), data);
+                                    }
+
+                                    continue;
                                 }
                             }
-                            _ => {
-                                // Handle unknown name
+                            "todo_write" => {
+                                let plan: Result<AmpPlanWriteToolCall, serde_json::Error> =
+                                    serde_json::from_value(tool_use_content_block.input.clone());
+                                eprintln!("Plan: {:?}", plan);
+                                if let Ok(plan) = plan {
+                                    let notification = SessionNotification {
+                                        session_id: session_id.clone(),
+                                        update: SessionUpdate::Plan(plan.to_acp_plan()),
+                                        meta: None,
+                                    };
+
+                                    if let Err(e) =
+                                        self.client().session_notification(notification).await
+                                    {
+                                        error!("Failed to send session notification: {:?}", e);
+                                    }
+                                    continue;
+                                }
                             }
+                            _ => {}
                         }
 
                         let notification = SessionNotification {
@@ -355,7 +445,7 @@ impl AmpAgent {
                                     content: Some(vec![ToolCallContent::Diff {
                                         diff: Diff {
                                             path: PathBuf::from(file_edit.path.clone()),
-                                            old_text: Some(file_edit.old_str),
+                                            old_text: file_edit.old_str,
                                             new_text: file_edit.new_str,
                                             meta: None,
                                         },
@@ -453,7 +543,6 @@ impl Agent for AmpAgent {
         &self,
         _request: AuthenticateRequest,
     ) -> Result<AuthenticateResponse, Error> {
-        // We don't currently require authentication
         Ok(AuthenticateResponse { meta: None })
     }
 
@@ -545,7 +634,7 @@ impl Agent for AmpAgent {
                 .unwrap()
                 .try_wait();
 
-            if let Err(e) = res {
+            if let Err(_) = res {
                 return Err(Error::internal_error());
             } else if let Ok(status) = res {
                 let conversation = match self.get_amp_thread(session_id.clone()) {
@@ -564,8 +653,7 @@ impl Agent for AmpAgent {
                     conversation_so_far = Some(conversation);
 
                     if status.is_some() {
-                        //finished processing user response
-                        // Send a end turn response
+                        // finished processing send a end turn response
                         return Ok(PromptResponse {
                             stop_reason: StopReason::EndTurn,
                             meta: None,
