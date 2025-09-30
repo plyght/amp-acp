@@ -7,17 +7,16 @@ The project has only been tested this on Macos 26 so far
 
 ## Supported features
 - Create Session
-- Streamed messages
 - Thinking
 - File edits rendered as diff in chat
 - Cancellation
-
-## Unsupported features
 - Resources
 - Authentication
-- Session load
-- MCP (MCP servers configured via AMP do work but MCP servers configured on the client do not)
 - Agent plan
+
+## Unsupported features
+- Session load
+- MCP (MCP servers configured on the client do not get passed through to AMP)
 - Follow Agent
 - Non text content types
 
