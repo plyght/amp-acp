@@ -1,14 +1,10 @@
 use agent_client_protocol::{
-    Agent, AgentCapabilities, AgentSideConnection, Annotations, AudioContent, AuthenticateRequest,
-    AuthenticateResponse, BlobResourceContents, CancelNotification, Client, ContentBlock, Diff,
-    EmbeddedResource, EmbeddedResourceResource, Error, ErrorCode, ExtNotification, ExtRequest,
-    ExtResponse, ImageContent, InitializeRequest, InitializeResponse, LoadSessionRequest,
-    LoadSessionResponse, McpCapabilities, McpServer, NewSessionRequest, NewSessionResponse,
-    PermissionOption, PermissionOptionId, PermissionOptionKind, Plan, PlanEntry, PlanEntryPriority,
-    PlanEntryStatus, PromptCapabilities, PromptRequest, PromptResponse, RequestPermissionOutcome,
-    RequestPermissionRequest, ResourceLink, SessionId, SessionMode, SessionModeId,
-    SessionModeState, SessionNotification, SessionUpdate, SetSessionModeRequest,
-    SetSessionModeResponse, StopReason, TextContent, TextResourceContents, ToolCall,
+    Agent, AgentCapabilities, AgentSideConnection, AuthenticateRequest,
+    AuthenticateResponse, CancelNotification, Client, ContentBlock, Diff, EmbeddedResourceResource, Error, ExtNotification, ExtRequest,
+    ExtResponse, InitializeRequest, InitializeResponse, LoadSessionRequest,
+    LoadSessionResponse, McpCapabilities, NewSessionRequest, NewSessionResponse, Plan, PlanEntry, PlanEntryPriority,
+    PlanEntryStatus, PromptCapabilities, PromptRequest, PromptResponse, SessionId, SessionNotification, SessionUpdate, SetSessionModeRequest,
+    SetSessionModeResponse, StopReason, TextContent, ToolCall,
     ToolCallContent, ToolCallId, ToolCallLocation, ToolCallStatus, ToolCallUpdate,
     ToolCallUpdateFields, ToolKind, V1,
 };
@@ -367,10 +363,7 @@ impl AmpAgent {
                                     serde_json::from_value(tool_use_content_block.input.clone());
 
                                 if let Ok(data) = data {
-                                    if !file_edits.contains_key(&tool_use_content_block.id.clone())
-                                    {
-                                        file_edits.insert(tool_use_content_block.id.clone(), data);
-                                    }
+                                    file_edits.entry(tool_use_content_block.id.clone()).or_insert(data);
 
                                     continue;
                                 }
@@ -640,7 +633,7 @@ impl Agent for AmpAgent {
                 .unwrap()
                 .try_wait();
 
-            if let Err(_) = res {
+            if res.is_err() {
                 return Err(Error::internal_error());
             } else if let Ok(status) = res {
                 let conversation = match self.get_amp_thread(session_id.clone()) {
