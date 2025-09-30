@@ -2,6 +2,17 @@
 name = "amp-acp"
 version = "0.1.0"
 edition = "2024"
+authors = ["Hamish Taylor <hamisht11@gmail.com>"]
+license = "MIT"
+description = "An AMP ACP (Agent Client Protocol) server"
+homepage = "https://github.com/Hamish-taylor/amp-acp"
+repository = "https://github.com/Hamish-taylor/amp-acp"
+readme = "README.md"
+keywords = ["acp", "agent", "protocol", "server", "amp"]
+
+[[bin]]
+name = "amp-acp"
+path = "src/main.rs"
 
 [dependencies]
 agent-client-protocol = "0.4.3"
