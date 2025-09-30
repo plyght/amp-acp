@@ -1,10 +1,11 @@
 use agent_client_protocol::{
-    Agent, AgentCapabilities, AgentSideConnection, AuthenticateRequest,
-    AuthenticateResponse, CancelNotification, Client, ContentBlock, Diff, EmbeddedResourceResource, Error, ExtNotification, ExtRequest,
-    ExtResponse, InitializeRequest, InitializeResponse, LoadSessionRequest,
-    LoadSessionResponse, McpCapabilities, NewSessionRequest, NewSessionResponse, Plan, PlanEntry, PlanEntryPriority,
-    PlanEntryStatus, PromptCapabilities, PromptRequest, PromptResponse, SessionId, SessionNotification, SessionUpdate, SetSessionModeRequest,
-    SetSessionModeResponse, StopReason, TextContent, ToolCall,
+    Agent, AgentCapabilities, AgentSideConnection, AuthMethod, AuthMethodId, AuthenticateRequest,
+    AuthenticateResponse, CancelNotification, Client, ContentBlock, Diff, EmbeddedResourceResource,
+    Error, ExtNotification, ExtRequest, ExtResponse, InitializeRequest, InitializeResponse,
+    LoadSessionRequest, LoadSessionResponse, McpCapabilities, NewSessionRequest,
+    NewSessionResponse, Plan, PlanEntry, PlanEntryPriority, PlanEntryStatus, PromptCapabilities,
+    PromptRequest, PromptResponse, SessionId, SessionNotification, SessionUpdate,
+    SetSessionModeRequest, SetSessionModeResponse, StopReason, TextContent, ToolCall,
     ToolCallContent, ToolCallId, ToolCallLocation, ToolCallStatus, ToolCallUpdate,
     ToolCallUpdateFields, ToolKind, V1,
 };
@@ -363,7 +364,9 @@ impl AmpAgent {
                                     serde_json::from_value(tool_use_content_block.input.clone());
 
                                 if let Ok(data) = data {
-                                    file_edits.entry(tool_use_content_block.id.clone()).or_insert(data);
+                                    file_edits
+                                        .entry(tool_use_content_block.id.clone())
+                                        .or_insert(data);
 
                                     continue;
                                 }
@@ -509,7 +512,7 @@ fn get_line_number_from_diff_str(diff: &str) -> Option<u32> {
 
 #[async_trait::async_trait(?Send)]
 impl Agent for AmpAgent {
-    async fn initialize(&self, request: InitializeRequest) -> Result<InitializeResponse, Error> {
+    async fn initialize(&self, _request: InitializeRequest) -> Result<InitializeResponse, Error> {
         return Ok(InitializeResponse {
             meta: None,
             protocol_version: V1,
@@ -541,11 +544,22 @@ impl Agent for AmpAgent {
 
     async fn new_session(&self, request: NewSessionRequest) -> Result<NewSessionResponse, Error> {
         (*self.cwd).borrow_mut().replace(request.cwd.clone());
+
+        Command::new("amp")
+            .current_dir(request.cwd.clone())
+            .args(["--version"])
+            .output()
+            .map_err(|_| {
+                Error::invalid_request().with_data(
+                    "Amp is not installed: curl -fsSL https://ampcode.com/install.sh | bash",
+                )
+            })?;
+
         let output = Command::new("amp")
             .current_dir(request.cwd.clone())
             .args(["threads", "new"])
             .output()
-            .expect("failed to execute process");
+            .map_err(|e| Error::into_internal_error(e))?;
 
         let session_id = match String::from_utf8(output.stdout) {
             Ok(s) => Some(s.replace("\n", "")),
@@ -565,7 +579,7 @@ impl Agent for AmpAgent {
 
     async fn load_session(
         &self,
-        request: LoadSessionRequest,
+        _request: LoadSessionRequest,
     ) -> Result<LoadSessionResponse, Error> {
         todo!()
         // Loading sessions is not currently suppored by Zed, the code below should be mostly what is needed to support this.
@@ -606,12 +620,12 @@ impl Agent for AmpAgent {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()
-            .expect("Failed to start amp");
+            .map_err(|_| Error::internal_error().with_data("Failed to start amp"))?;
 
         if let Some(mut stdin) = child.stdin.take() {
-            stdin
-                .write_all(prompt.as_bytes())
-                .expect("Failed to send prompt to amp");
+            stdin.write_all(prompt.as_bytes()).map_err(|e| {
+                Error::internal_error().with_data(format!("Failed to send prompt to amp: {}", e))
+            })?;
         }
         self.set_amp_command(child);
 
@@ -664,14 +678,17 @@ impl Agent for AmpAgent {
         }
     }
 
-    async fn cancel(&self, args: CancelNotification) -> Result<(), Error> {
-        (*self.amp_command).borrow_mut().as_mut().unwrap().kill();
+    async fn cancel(&self, _args: CancelNotification) -> Result<(), Error> {
+        let res = (*self.amp_command).borrow_mut().as_mut().unwrap().kill();
+        if res.is_err() {
+            return Err(Error::internal_error().with_data("Could not kill the amp process"));
+        }
         Ok(())
     }
 
     async fn set_session_mode(
         &self,
-        args: SetSessionModeRequest,
+        _args: SetSessionModeRequest,
     ) -> Result<SetSessionModeResponse, Error> {
         todo!()
     }
