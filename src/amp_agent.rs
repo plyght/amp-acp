@@ -16,7 +16,7 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::env;
 use std::fs::File;
-use std::io::Read;
+use std::io::{Read, Write};
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::rc::Rc;
@@ -588,33 +588,39 @@ impl Agent for AmpAgent {
     }
 
     async fn prompt(&self, request: PromptRequest) -> Result<PromptResponse, Error> {
-        let output = Command::new("amp")
-            .current_dir(self.cwd.borrow().clone().unwrap())
-            .args([
-                "threads",
-                "continue",
-                &request.session_id.0,
-                "-x",
-                request
-                    .prompt
-                    .iter()
-                    .find_map(|b| {
-                        if let ContentBlock::Text(t) = b {
-                            Some(t)
-                        } else {
-                            None
-                        }
-                    })
-                    .unwrap()
-                    .text
-                    .as_str(),
-            ])
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .spawn()
-            .expect("Failed to spawn command");
+        let prompt = request
+            .prompt
+            .iter()
+            .map(|b| match b {
+                ContentBlock::Text(text_content) => text_content.text.clone(),
+                ContentBlock::Image(_) | ContentBlock::Audio(_) => String::new(),
+                ContentBlock::ResourceLink(resource_link) => resource_link.uri.clone(),
+                ContentBlock::Resource(embedded_resource) => match &embedded_resource.resource {
+                    EmbeddedResourceResource::TextResourceContents(text_resource_contents) => {
+                        text_resource_contents.text.clone()
+                    }
+                    EmbeddedResourceResource::BlobResourceContents(blob_resource_contents) => {
+                        blob_resource_contents.blob.clone()
+                    }
+                },
+            })
+            .collect::<Vec<String>>()
+            .join("");
 
-        self.set_amp_command(output);
+        let mut child = Command::new("amp")
+            .args(["threads", "continue", &request.session_id.0, "-x"])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("Failed to start amp");
+
+        if let Some(mut stdin) = child.stdin.take() {
+            stdin
+                .write_all(prompt.as_bytes())
+                .expect("Failed to send prompt to amp");
+        }
+        self.set_amp_command(child);
 
         // Implementation note
         // AMP has a json mode but this has some drawbacks
