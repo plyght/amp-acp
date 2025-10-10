@@ -70,7 +70,7 @@ pub struct AmpThinkingContentBlock {
 #[serde(rename_all = "camelCase")]
 pub struct AmpToolUseContentBlock {
     pub id: String,
-    pub name: String,
+    pub name: AmpTool,
     pub input: serde_json::Value,
 }
 
@@ -247,25 +247,95 @@ impl AmpDiff<AmpMessage> for AmpMessage {
     }
 }
 
-fn amp_tool_to_tool_kind(amp_tool: &str) -> ToolKind {
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum AmpTool {
+    Bash,
+    #[serde(rename = "create_file")]
+    CreateFile,
+    #[serde(rename = "edit_file")]
+    EditFile,
+    #[serde(rename = "finder")]
+    Finder,
+    #[serde(rename = "glob")]
+    Glob,
+    Grep,
+    #[serde(rename = "mermaid")]
+    Mermaid,
+    #[serde(rename = "oracle")]
+    Oracle,
+    Read,
+    #[serde(rename = "read_mcp_resource")]
+    ReadMcpResource,
+    #[serde(rename = "read_web_page")]
+    ReadWebPage,
+    Task,
+    #[serde(rename = "todo_read")]
+    TodoRead,
+    #[serde(rename = "todo_write")]
+    TodoWrite,
+    #[serde(rename = "undo_edit")]
+    UndoEdit,
+    #[serde(rename = "web_search")]
+    WebSearch,
+    #[serde(other)]
+    Other,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AmpReadToolInput {
+    path: String,
+    read_range: Option<Vec<i32>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AmpCreateToolInput {
+    path: String,
+    content: String,
+}
+
+impl ToString for AmpTool {
+    fn to_string(&self) -> String {
+        match self {
+            AmpTool::Oracle => "Consulting the Oracle".to_string(),
+            AmpTool::Read => "Reading file".to_string(),
+            AmpTool::ReadMcpResource => "Read mcp resource".to_string(),
+            AmpTool::ReadWebPage => "Read web page".to_string(),
+            AmpTool::Task => "Task".to_string(),
+            AmpTool::TodoRead => "Todo read".to_string(),
+            AmpTool::TodoWrite => "Todo write".to_string(),
+            AmpTool::UndoEdit => "Undo edit".to_string(),
+            AmpTool::WebSearch => "Web search".to_string(),
+            AmpTool::Other => "Unknown".to_string(),
+            AmpTool::Bash => "Bash".to_string(),
+            AmpTool::CreateFile => "Creating file".to_string(),
+            AmpTool::EditFile => "Editing file".to_string(),
+            AmpTool::Finder => "Finder".to_string(),
+            AmpTool::Glob => "Glob".to_string(),
+            AmpTool::Grep => "Grep".to_string(),
+            AmpTool::Mermaid => "Mermaid".to_string(),
+        }
+    }
+}
+
+fn amp_tool_to_tool_kind(amp_tool: &AmpTool) -> ToolKind {
     match amp_tool {
-        "Bash" => ToolKind::Execute,
-        "create_file" => ToolKind::Edit,
-        "edit_file" => ToolKind::Edit,
-        "finder" => ToolKind::Search,
-        "glob" => ToolKind::Execute,
-        "Grep" => ToolKind::Execute,
-        "mermaid" => ToolKind::Other,
-        "oracle" => ToolKind::Think,
-        "Read" => ToolKind::Read,
-        "read_mcp_resource" => ToolKind::Fetch,
-        "read_web_page" => ToolKind::Fetch,
-        "Task" => ToolKind::Think,
-        "todo_read" => ToolKind::Think,
-        "todo_write" => ToolKind::Think,
-        "undo_edit" => ToolKind::Edit,
-        "web_search" => ToolKind::Search,
-        _ => ToolKind::Other,
+        AmpTool::Bash => ToolKind::Execute,
+        AmpTool::CreateFile => ToolKind::Edit,
+        AmpTool::EditFile => ToolKind::Edit,
+        AmpTool::Finder => ToolKind::Search,
+        AmpTool::Glob => ToolKind::Execute,
+        AmpTool::Grep => ToolKind::Execute,
+        AmpTool::Mermaid => ToolKind::Other,
+        AmpTool::Oracle => ToolKind::Think,
+        AmpTool::Read => ToolKind::Read,
+        AmpTool::ReadMcpResource => ToolKind::Fetch,
+        AmpTool::ReadWebPage => ToolKind::Fetch,
+        AmpTool::Task => ToolKind::Think,
+        AmpTool::TodoRead => ToolKind::Think,
+        AmpTool::TodoWrite => ToolKind::Think,
+        AmpTool::UndoEdit => ToolKind::Edit,
+        AmpTool::WebSearch => ToolKind::Search,
+        AmpTool::Other => ToolKind::Other,
     }
 }
 
@@ -358,8 +428,10 @@ impl AmpAgent {
                         }
                     }
                     AmpContentBlock::ToolUse(tool_use_content_block) => {
-                        match tool_use_content_block.name.as_str() {
-                            "edit_file" => {
+                        let mut title = tool_use_content_block.name.to_string();
+                        let mut content = vec![];
+                        match tool_use_content_block.name {
+                            AmpTool::EditFile => {
                                 let data: Result<AmpEditFileToolCall, serde_json::Error> =
                                     serde_json::from_value(tool_use_content_block.input.clone());
 
@@ -371,7 +443,7 @@ impl AmpAgent {
                                     continue;
                                 }
                             }
-                            "todo_write" => {
+                            AmpTool::TodoWrite => {
                                 let plan: Result<AmpPlanWriteToolCall, serde_json::Error> =
                                     serde_json::from_value(tool_use_content_block.input.clone());
                                 eprintln!("Plan: {:?}", plan);
@@ -390,6 +462,45 @@ impl AmpAgent {
                                     continue;
                                 }
                             }
+                            AmpTool::Read => {
+                                let tool_call: Result<AmpReadToolInput, serde_json::Error> =
+                                    serde_json::from_value(tool_use_content_block.input.clone());
+
+                                if let Ok(t) = tool_call {
+                                    let path = PathBuf::from(&t.path);
+                                    let file_name = path
+                                        .file_name()
+                                        .unwrap_or_default()
+                                        .to_str()
+                                        .unwrap_or_default();
+                                    if path.is_file() {
+                                        title = format!("Read [{}](file://{})", file_name, t.path);
+                                    } else {
+                                        title = format!("Read {}", t.path);
+                                    }
+                                }
+                            }
+                            AmpTool::CreateFile => {
+                                let tool_call: Result<AmpCreateToolInput, serde_json::Error> =
+                                    serde_json::from_value(tool_use_content_block.input.clone());
+                                if let Ok(t) = tool_call {
+                                    content.push(ToolCallContent::Content {
+                                        content: ContentBlock::Text(TextContent {
+                                            annotations: None,
+                                            text: t.content,
+                                            meta: None,
+                                        }),
+                                    });
+                                    let path = PathBuf::from(&t.path);
+                                    let file_name = path
+                                        .file_name()
+                                        .unwrap_or_default()
+                                        .to_str()
+                                        .unwrap_or_default();
+
+                                    title = format!("Created [{}](file://{})", file_name, t.path);
+                                }
+                            }
                             _ => {}
                         }
 
@@ -397,10 +508,10 @@ impl AmpAgent {
                             session_id: session_id.clone(),
                             update: SessionUpdate::ToolCall(ToolCall {
                                 id: ToolCallId(Arc::from(tool_use_content_block.id.clone())),
-                                kind: amp_tool_to_tool_kind(tool_use_content_block.name.as_str()),
+                                kind: amp_tool_to_tool_kind(&tool_use_content_block.name),
                                 status: ToolCallStatus::Pending,
-                                title: tool_use_content_block.name.clone(),
-                                content: vec![],
+                                title,
+                                content,
                                 locations: vec![],
                                 raw_input: None,
                                 raw_output: None,
