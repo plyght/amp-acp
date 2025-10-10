@@ -293,6 +293,25 @@ pub struct AmpCreateToolInput {
     content: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AmpBashToolInput {
+    cmd: String,
+    cwd: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AmpWebSearchToolInput {
+    query: String,
+    max_results: Option<u32>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AmpWebReadToolInput {
+    url: String,
+    prompt: Option<String>,
+    raw: Option<bool>,
+}
+
 impl ToString for AmpTool {
     fn to_string(&self) -> String {
         match self {
@@ -499,6 +518,30 @@ impl AmpAgent {
                                         .unwrap_or_default();
 
                                     title = format!("Created [{}](file://{})", file_name, t.path);
+                                }
+                            }
+                            AmpTool::Bash => {
+                                let tool_call: Result<AmpBashToolInput, serde_json::Error> =
+                                    serde_json::from_value(tool_use_content_block.input.clone());
+
+                                if let Ok(t) = tool_call {
+                                    title = t.cmd;
+                                }
+                            }
+                            AmpTool::WebSearch => {
+                                let tool_call: Result<AmpWebSearchToolInput, serde_json::Error> =
+                                    serde_json::from_value(tool_use_content_block.input.clone());
+
+                                if let Ok(t) = tool_call {
+                                    title = format!("Searching for {}", t.query);
+                                }
+                            }
+                            AmpTool::ReadWebPage => {
+                                let tool_call: Result<AmpWebReadToolInput, serde_json::Error> =
+                                    serde_json::from_value(tool_use_content_block.input.clone());
+
+                                if let Ok(t) = tool_call {
+                                    title = format!("Reading webpage {}", t.url);
                                 }
                             }
                             _ => {}
