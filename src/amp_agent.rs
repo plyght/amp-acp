@@ -318,7 +318,7 @@ impl ToString for AmpTool {
             AmpTool::Oracle => "Consulting the Oracle".to_string(),
             AmpTool::Read => "Reading file".to_string(),
             AmpTool::ReadMcpResource => "Read mcp resource".to_string(),
-            AmpTool::ReadWebPage => "Read web page".to_string(),
+            AmpTool::ReadWebPage => "Read webpage".to_string(),
             AmpTool::Task => "Task".to_string(),
             AmpTool::TodoRead => "Todo read".to_string(),
             AmpTool::TodoWrite => "Todo write".to_string(),
@@ -533,7 +533,7 @@ impl AmpAgent {
                                     serde_json::from_value(tool_use_content_block.input.clone());
 
                                 if let Ok(t) = tool_call {
-                                    title = format!("Searching for {}", t.query);
+                                    title = format!("Searching for \"{}\"", t.query);
                                 }
                             }
                             AmpTool::ReadWebPage => {
@@ -541,7 +541,7 @@ impl AmpAgent {
                                     serde_json::from_value(tool_use_content_block.input.clone());
 
                                 if let Ok(t) = tool_call {
-                                    title = format!("Reading webpage {}", t.url);
+                                    title = format!("Reading {}", t.url);
                                 }
                             }
                             _ => {}
