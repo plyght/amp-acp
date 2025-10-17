@@ -11,14 +11,18 @@ The project has only been tested this on Macos 26 so far
 - File edits rendered as diff in chat
 - Cancellation
 - Resources
-- Authentication
+- Authentication (API key)
 - Agent plan
+- MCP server pass-through (stdio, HTTP, SSE)
+- Image input support
+- Audio input support
+- Embedded context/resources
+- Streaming via --stream-json (real-time, no polling)
 
 ## Unsupported features
-- Session load
-- MCP (MCP servers configured on the client do not get passed through to AMP)
+- Session load (partially implemented)
 - Follow Agent
-- Non text content types
+- Session modes
 
 ## Installation
 Currently the project needs to be built from source.

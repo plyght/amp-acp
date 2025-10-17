@@ -1,7 +1,7 @@
 [package]
 name = "amp-acp"
 version = "0.1.0"
-edition = "2024"
+edition = "2021"
 authors = ["Hamish Taylor <hamisht11@gmail.com>"]
 license = "MIT"
 description = "An AMP ACP (Agent Client Protocol) server"
